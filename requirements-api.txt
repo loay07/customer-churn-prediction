@@ -1,0 +1,9 @@
+# Runtime dependencies for the API only (used by the Docker image).
+# For local development, notebooks, and tests, use requirements.txt instead.
+scikit-learn==1.9.0
+pandas==3.0.3
+numpy==2.5.1
+joblib==1.5.3
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.4
