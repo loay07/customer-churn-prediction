@@ -1,0 +1,6 @@
+{
+    "threshold": 0.3,
+    "model_type": "Logistic Regression",
+    "target": "Churn",
+    "positive_class": 1
+}
