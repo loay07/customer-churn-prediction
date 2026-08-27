@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Customer Churn Risk — Retention Tool</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --panel: #ffffff;
+    --border: #e2e6ec;
+    --text: #1c2430;
+    --muted: #667085;
+    --accent: #2454ff;
+    --accent-dark: #173bb0;
+    --low: #1a9e6b;
+    --low-bg: #e7f8f1;
+    --medium: #b4780a;
+    --medium-bg: #fdf2df;
+    --high: #d13c3c;
+    --high-bg: #fbe8e8;
+    --radius: 12px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  header {
+    padding: 28px 32px 20px;
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  header h1 {
+    margin: 0 0 6px;
+    font-size: 1.65rem;
+  }
+
+  header p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.98rem;
+  }
+
+  main {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 8px 32px 48px;
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  @media (max-width: 900px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 22px 24px;
+  }
+
+  .card + .card { margin-top: 20px; }
+
+  .card h2 {
+    font-size: 1.02rem;
+    margin: 0 0 16px;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 14px 16px;
+  }
+
+  label {
+    display: flex;
+    flex-direction: column;
+    font-size: 0.82rem;
+    color: var(--muted);
+    gap: 5px;
+  }
+
+  select, input {
+    font: inherit;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--text);
+  }
+
+  select:focus, input:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(36, 84, 255, 0.12);
+  }
+
+  .actions {
+    margin-top: 22px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  button {
+    font: inherit;
+    font-weight: 600;
+    padding: 11px 22px;
+    border-radius: 9px;
+    border: none;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+  }
+
+  button:hover { background: var(--accent-dark); }
+  button:disabled { background: #9aa7c7; cursor: default; }
+
+  .error-text {
+    color: var(--high);
+    font-size: 0.85rem;
+  }
+
+  .result-panel { position: sticky; top: 24px; }
+
+  .placeholder {
+    color: var(--muted);
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+
+  .risk-badge {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-weight: 700;
+    font-size: 0.78rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .risk-Low { background: var(--low-bg); color: var(--low); }
+  .risk-Medium { background: var(--medium-bg); color: var(--medium); }
+  .risk-High { background: var(--high-bg); color: var(--high); }
+
+  .prob-value {
+    font-size: 2.6rem;
+    font-weight: 700;
+    margin: 10px 0 2px;
+  }
+
+  .prob-caption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-bottom: 14px;
+  }
+
+  .bar-track {
+    height: 10px;
+    border-radius: 999px;
+    background: #eceff4;
+    overflow: hidden;
+    margin-bottom: 4px;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    transition: width 0.4s ease;
+  }
+
+  .fill-Low { background: var(--low); }
+  .fill-Medium { background: var(--medium); }
+  .fill-High { background: var(--high); }
+
+  .threshold-marker {
+    font-size: 0.7rem;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+
+  .label-line {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 18px 0 6px;
+    font-weight: 600;
+  }
+
+  .recommendation {
+    margin-top: 16px;
+    padding: 12px 14px;
+    border-radius: 9px;
+    font-size: 0.88rem;
+    line-height: 1.45;
+  }
+
+  .rec-elevated { background: var(--high-bg); color: #7a2323; }
+  .rec-normal { background: var(--low-bg); color: #145c3f; }
+
+  .disclaimer {
+    margin-top: 14px;
+    font-size: 0.76rem;
+    color: var(--muted);
+    line-height: 1.5;
+    border-top: 1px solid var(--border);
+    padding-top: 12px;
+  }
+
+  footer {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 0 32px 40px;
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Customer Churn Risk</h1>
+  <p>
+    A retention decision-support tool for telecom account teams — enter a customer's
+    profile to estimate churn risk from historical patterns and get a threshold-based
+    recommendation.
+  </p>
+</header>
+
+<main>
+  <form id="churn-form">
+    <div class="card">
+      <h2>Customer Profile</h2>
+      <div class="grid">
+        <label>Gender
+          <select name="gender">
+            <option value="Female">Female</option>
+            <option value="Male">Male</option>
+          </select>
+        </label>
+        <label>Senior Citizen
+          <select name="SeniorCitizen">
+            <option value="0">No</option>
+            <option value="1">Yes</option>
+          </select>
+        </label>
+        <label>Partner
+          <select name="Partner">
+            <option value="Yes">Yes</option>
+            <option value="No">No</option>
+          </select>
+        </label>
+        <label>Dependents
+          <select name="Dependents">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Account &amp; Billing</h2>
+      <div class="grid">
+        <label>Tenure (months)
+          <input type="number" name="tenure" min="0" max="120" step="1" value="5" required />
+        </label>
+        <label>Contract
+          <select name="Contract">
+            <option value="Month-to-month">Month-to-month</option>
+            <option value="One year">One year</option>
+            <option value="Two year">Two year</option>
+          </select>
+        </label>
+        <label>Paperless Billing
+          <select name="PaperlessBilling">
+            <option value="Yes">Yes</option>
+            <option value="No">No</option>
+          </select>
+        </label>
+        <label>Payment Method
+          <select name="PaymentMethod">
+            <option value="Electronic check">Electronic check</option>
+            <option value="Mailed check">Mailed check</option>
+            <option value="Bank transfer (automatic)">Bank transfer (automatic)</option>
+            <option value="Credit card (automatic)">Credit card (automatic)</option>
+          </select>
+        </label>
+        <label>Monthly Charges ($)
+          <input type="number" name="MonthlyCharges" min="0" step="0.01" value="85.50" required />
+        </label>
+        <label>Total Charges ($)
+          <input type="number" name="TotalCharges" min="0" step="0.01" value="420.75" required />
+        </label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Services</h2>
+      <div class="grid">
+        <label>Phone Service
+          <select name="PhoneService">
+            <option value="Yes">Yes</option>
+            <option value="No">No</option>
+          </select>
+        </label>
+        <label>Multiple Lines
+          <select name="MultipleLines">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+            <option value="No phone service">No phone service</option>
+          </select>
+        </label>
+        <label>Internet Service
+          <select name="InternetService">
+            <option value="Fiber optic">Fiber optic</option>
+            <option value="DSL">DSL</option>
+            <option value="No">No</option>
+          </select>
+        </label>
+        <label>Online Security
+          <select name="OnlineSecurity">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+            <option value="No internet service">No internet service</option>
+          </select>
+        </label>
+        <label>Online Backup
+          <select name="OnlineBackup">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+            <option value="No internet service">No internet service</option>
+          </select>
+        </label>
+        <label>Device Protection
+          <select name="DeviceProtection">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+            <option value="No internet service">No internet service</option>
+          </select>
+        </label>
+        <label>Tech Support
+          <select name="TechSupport">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+            <option value="No internet service">No internet service</option>
+          </select>
+        </label>
+        <label>Streaming TV
+          <select name="StreamingTV">
+            <option value="Yes">Yes</option>
+            <option value="No">No</option>
+            <option value="No internet service">No internet service</option>
+          </select>
+        </label>
+        <label>Streaming Movies
+          <select name="StreamingMovies">
+            <option value="No">No</option>
+            <option value="Yes">Yes</option>
+            <option value="No internet service">No internet service</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="submit" id="submit-btn">Assess Churn Risk</button>
+      <span class="error-text" id="error-text"></span>
+    </div>
+  </form>
+
+  <div class="result-panel">
+    <div class="card" id="result-card">
+      <h2>Churn Risk Assessment</h2>
+      <div class="placeholder" id="result-placeholder">
+        Fill in the customer's profile and click <strong>Assess Churn Risk</strong>
+        to see the model's estimate here.
+      </div>
+      <div id="result-content" style="display:none;">
+        <span class="risk-badge" id="risk-badge">Low</span>
+        <div class="prob-value" id="prob-value">0%</div>
+        <div class="prob-caption">Estimated probability of churn</div>
+
+        <div class="bar-track"><div class="bar-fill" id="bar-fill" style="width:0%"></div></div>
+        <div class="threshold-marker"><span id="threshold-label">Decision threshold: 30%</span></div>
+
+        <div class="label-line">
+          <span id="classification-label">Likely to Stay</span>
+        </div>
+
+        <div class="recommendation" id="recommendation"></div>
+
+        <div class="disclaimer">
+          This estimate is based on statistical patterns learned from historical
+          customer data. It reflects correlation, not a proven cause of churn, and
+          should support a human retention decision rather than replace one.
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  Model: Logistic Regression pipeline trained on the IBM Telco Customer Churn dataset ·
+  Decision threshold tuned via stratified 5-fold cross-validation for recall ·
+  See <a href="/docs">/docs</a> for the API reference.
+</footer>
+
+<script>
+  const form = document.getElementById("churn-form");
+  const submitBtn = document.getElementById("submit-btn");
+  const errorText = document.getElementById("error-text");
+  const placeholder = document.getElementById("result-placeholder");
+  const resultContent = document.getElementById("result-content");
+
+  const monthlyInput = form.elements["MonthlyCharges"];
+  const tenureInput = form.elements["tenure"];
+  const totalInput = form.elements["TotalCharges"];
+  let totalChargesTouchedByUser = false;
+  totalInput.addEventListener("input", () => { totalChargesTouchedByUser = true; });
+
+  function syncTotalCharges() {
+    if (totalChargesTouchedByUser) return;
+    const tenure = parseFloat(tenureInput.value) || 0;
+    const monthly = parseFloat(monthlyInput.value) || 0;
+    totalInput.value = (tenure * monthly).toFixed(2);
+  }
+  tenureInput.addEventListener("input", syncTotalCharges);
+  monthlyInput.addEventListener("input", syncTotalCharges);
+
+  const RECOMMENDATIONS = {
+    Low: "No action needed — this customer's profile closely matches customers who stay.",
+    Medium: "Consider proactive retention outreach, such as a check-in call or a loyalty offer.",
+    High: "Recommend prioritized retention outreach — this profile closely matches customers who have churned historically.",
+  };
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    errorText.textContent = "";
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Assessing…";
+
+    const formData = new FormData(form);
+    const payload = {
+      gender: formData.get("gender"),
+      SeniorCitizen: Number(formData.get("SeniorCitizen")),
+      Partner: formData.get("Partner"),
+      Dependents: formData.get("Dependents"),
+      tenure: Number(formData.get("tenure")),
+      PhoneService: formData.get("PhoneService"),
+      MultipleLines: formData.get("MultipleLines"),
+      InternetService: formData.get("InternetService"),
+      OnlineSecurity: formData.get("OnlineSecurity"),
+      OnlineBackup: formData.get("OnlineBackup"),
+      DeviceProtection: formData.get("DeviceProtection"),
+      TechSupport: formData.get("TechSupport"),
+      StreamingTV: formData.get("StreamingTV"),
+      StreamingMovies: formData.get("StreamingMovies"),
+      Contract: formData.get("Contract"),
+      PaperlessBilling: formData.get("PaperlessBilling"),
+      PaymentMethod: formData.get("PaymentMethod"),
+      MonthlyCharges: Number(formData.get("MonthlyCharges")),
+      TotalCharges: Number(formData.get("TotalCharges")),
+    };
+
+    try {
+      const response = await fetch("/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        const detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail);
+        throw new Error(detail || `Request failed (${response.status})`);
+      }
+
+      const result = await response.json();
+      renderResult(result);
+    } catch (err) {
+      errorText.textContent = err.message || "Something went wrong. Is the API running?";
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Assess Churn Risk";
+    }
+  });
+
+  function renderResult(result) {
+    placeholder.style.display = "none";
+    resultContent.style.display = "block";
+
+    const pct = Math.round(result.churn_probability * 100);
+    const thresholdPct = Math.round(result.threshold * 100);
+
+    document.getElementById("prob-value").textContent = `${pct}%`;
+    document.getElementById("bar-fill").style.width = `${pct}%`;
+    document.getElementById("bar-fill").className = `bar-fill fill-${result.risk_category}`;
+    document.getElementById("threshold-label").textContent =
+      `Decision threshold: ${thresholdPct}% — probabilities at or above this are classified "Likely to Churn"`;
+
+    const badge = document.getElementById("risk-badge");
+    badge.textContent = `${result.risk_category} Risk`;
+    badge.className = `risk-badge risk-${result.risk_category}`;
+
+    document.getElementById("classification-label").textContent = result.label;
+
+    const rec = document.getElementById("recommendation");
+    rec.textContent = RECOMMENDATIONS[result.risk_category] || "";
+    rec.className = `recommendation ${result.risk_category === "Low" ? "rec-normal" : "rec-elevated"}`;
+  }
+</script>
+</body>
+</html>
