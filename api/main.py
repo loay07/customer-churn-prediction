@@ -18,20 +18,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from api.schemas import ChurnPredictionResponse, CustomerFeatures, HealthResponse
-from src.churn_model import ChurnModelService
+from api.schemas import CustomerFeatures, HealthResponse, RetentionAction, RetentionIntelligenceResponse, RiskDriver
+from src.retention.service import RetentionIntelligenceService
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
-_service: ChurnModelService | None = None
+_service: RetentionIntelligenceService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _service
     try:
-        _service = ChurnModelService()
+        _service = RetentionIntelligenceService()
     except FileNotFoundError as exc:
         raise RuntimeError(
             "Could not load the trained model or metadata from models/. "
@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
         ) from exc
 
     schema_fields = set(CustomerFeatures.model_fields)
-    pipeline_fields = set(_service.required_columns)
+    pipeline_fields = set(_service.model_service.required_columns)
     if schema_fields != pipeline_fields:
         raise RuntimeError(
             "CustomerFeatures schema does not match the trained pipeline's "
@@ -52,14 +52,18 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Customer Churn Prediction API",
+    title="Customer Retention Intelligence API",
     description=(
-        "Serves churn-risk predictions from a logistic regression pipeline "
-        "trained on the IBM Telco Customer Churn dataset. The classification "
-        "threshold (0.30) was tuned for recall so the business catches more "
-        "at-risk customers, at the cost of some false alarms."
+        "Serves churn-risk predictions, per-customer prediction explanations, "
+        "and business-rule retention suggestions, built around a logistic "
+        "regression pipeline trained on the IBM Telco Customer Churn dataset. "
+        "The classification threshold (0.30) was tuned for recall so the "
+        "business catches more at-risk customers, at the cost of some false "
+        "alarms. Explanations describe what influenced the model's prediction, "
+        "not why a customer would actually churn; suggested actions are "
+        "business-rule heuristics, not causally validated treatments."
     ),
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -71,7 +75,7 @@ app.add_middleware(
 )
 
 
-def get_service() -> ChurnModelService:
+def get_service() -> RetentionIntelligenceService:
     if _service is None:
         raise HTTPException(status_code=503, detail="Model is not loaded yet.")
     return _service
@@ -80,17 +84,34 @@ def get_service() -> ChurnModelService:
 @app.get("/health", response_model=HealthResponse, tags=["monitoring"])
 def health() -> dict[str, Any]:
     service = get_service()
-    return {"status": "ok", "model_type": service.model_type, "threshold": service.threshold}
+    return {
+        "status": "ok",
+        "model_type": service.model_service.model_type,
+        "threshold": service.model_service.threshold,
+    }
 
 
-@app.post("/predict", response_model=ChurnPredictionResponse, tags=["prediction"])
-def predict(customer: CustomerFeatures) -> dict[str, Any]:
+@app.post("/predict", response_model=RetentionIntelligenceResponse, tags=["prediction"])
+def predict(customer: CustomerFeatures) -> RetentionIntelligenceResponse:
+    """Score a customer and return the full retention-intelligence result:
+    churn prediction, the signals that drove it, and business-rule
+    retention suggestions traceable to those signals."""
     service = get_service()
     try:
-        result = service.predict(customer.model_dump())
+        result = service.analyze(customer.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return result.to_dict()
+
+    return RetentionIntelligenceResponse(
+        churn_probability=result.churn_probability,
+        prediction=result.prediction,
+        label=result.label,
+        threshold=result.threshold,
+        risk_category=result.risk_category,
+        risk_drivers=[RiskDriver(**d.__dict__) for d in result.risk_drivers],
+        protective_factors=[RiskDriver(**d.__dict__) for d in result.protective_factors],
+        suggested_actions=[RetentionAction(**a.__dict__) for a in result.suggested_actions],
+    )
 
 
 if FRONTEND_DIR.exists():

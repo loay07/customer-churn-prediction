@@ -1,11 +1,14 @@
-# Customer Churn Prediction — Telecom Retention Risk Model
+# Customer Retention Intelligence — Telecom Churn & Retention Decision Support
 
-An end-to-end churn-prediction system for a telecom business: a logistic regression
-model that estimates the probability a customer will cancel their service, wrapped in a
-FastAPI backend and a small retention-focused frontend. This project is framed around a
-business decision, not just a modeling exercise — the write-up below documents the
-experiments, the dead ends, and the reasoning behind every modeling choice, including
-ones that didn't make it into the final model.
+An end-to-end retention-decision-support system for a telecom business. At its core is a
+logistic regression model that estimates the probability a customer will cancel their
+service — but the product doesn't stop at a probability. For each customer it also
+explains *which signals* pushed that prediction, separates the ones the business can
+actually act on, and maps them to a retention playbook, all wrapped in a FastAPI backend
+and two frontends. This project is framed around a business decision, not just a
+modeling exercise — the write-up below documents the experiments, the dead ends, and the
+reasoning behind every modeling and product choice, including ones that didn't make it
+into the final system.
 
 ## Table of Contents
 
@@ -25,14 +28,16 @@ ones that didn't make it into the final model.
 14. [Final Performance](#final-performance)
 15. [Confusion Matrix Interpretation](#confusion-matrix-interpretation)
 16. [Lessons Learned](#lessons-learned)
-17. [API](#api)
-18. [Running Locally](#running-locally)
-19. [Static Demo (GitHub Pages)](#static-demo-github-pages)
-20. [Testing](#testing)
-21. [Example Prediction Request/Response](#example-prediction-requestresponse)
-22. [Repository Structure](#repository-structure)
-23. [Limitations](#limitations)
-24. [Future Improvements](#future-improvements)
+17. [From Churn Prediction to Retention Decision Support](#from-churn-prediction-to-retention-decision-support)
+18. [API](#api)
+19. [Running Locally](#running-locally)
+20. [Static Demo (GitHub Pages)](#static-demo-github-pages)
+21. [Testing](#testing)
+22. [Example Prediction Request/Response](#example-prediction-requestresponse)
+23. [Repository Structure](#repository-structure)
+24. [Limitations](#limitations)
+25. [Future State: Toward Intervention Targeting](#future-state-toward-intervention-targeting)
+26. [Future Improvements](#future-improvements)
 
 ---
 
@@ -88,10 +93,18 @@ Raw CSV → sklearn Pipeline (ColumnTransformer: OneHotEncoder + StandardScaler)
                                                                                         │
                                                                               churn_logistic_model.joblib
                                                                                         │
+                                                                        src/churn_model.py (ChurnModelService)
+                                                                          "what does this customer look
+                                                                             like to the model?"
+                                                                                        │
+                                                                     src/retention/explain.py + recommendations.py
+                                                                      "what drove that prediction, and what could
+                                                                            the business do about it?"
+                                                                                        │
                                                         ┌───────────────────────────────┴───────────────────────────────┐
                                                         │                     FastAPI (api/main.py)                     │
-                                                        │   loads pipeline + threshold once at startup, exposes         │
-                                                        │   /health and /predict, serves the frontend as static files   │
+                                                        │   loads the pipeline once at startup, exposes /health and     │
+                                                        │   /predict (full retention intelligence), serves frontend/    │
                                                         └───────────────────────────────┬───────────────────────────────┘
                                                                                         │
                                                                        frontend/index.html (retention dashboard UI)
@@ -459,10 +472,114 @@ Actual: Churn          85               289
   OOF-based threshold choice generalized to the test set far more consistently than the
   single-split choice did.
 
+## From Churn Prediction to Retention Decision Support
+
+Everything above answers one question: **who is likely to churn?** That's necessary but
+not sufficient for a retention team with limited time and budget. Knowing a customer
+scores 64% churn probability doesn't tell an agent what to *do* — so this project was
+extended (see [`notebooks/03_retention-intelligence.ipynb`](notebooks/03_retention-intelligence.ipynb)
+for the original exploration) to also answer:
+
+> Which model signals are contributing to this customer's churn risk, and what
+> retention actions could the business consider?
+
+This extension adds two new layers on top of the frozen, unmodified churn model —
+**the model itself was not retrained, retuned, or replaced for any of this.**
+
+### Layer 1: Explaining the prediction (`src/retention/explain.py`)
+
+Logistic regression is interpretable by construction: its decision function is a sum of
+`coefficient × transformed_feature_value` terms passed through a sigmoid. That sum can be
+decomposed back into per-feature pieces — a customer-specific breakdown of what pushed
+their particular prediction up or down.
+
+For each of the model's 46 transformed input columns (one-hot categories + 3 scaled
+numeric features), the explanation layer computes:
+
+```
+contribution = transformed_feature_value × coefficient
+```
+
+- **Positive contribution** → this signal pushed the prediction *toward* churn (a "risk driver").
+- **Negative contribution** → this signal pushed the prediction *toward* staying (a "protective factor").
+
+Raw transformed names like `categorical__Contract_Month-to-month` are mapped back to
+their original column and category (`Contract = Month-to-month`), and numeric features
+are compared against the fitted `StandardScaler`'s training mean to produce plain-language
+context: `Tenure: 1 month (below average)`. The top 5 risk drivers and top 5 protective
+factors (by contribution magnitude) are what get shown per customer.
+
+**This describes what influenced the model's output. It is not a causal claim about why
+the customer will actually churn.** The UI never says "the customer will churn because of
+X" — only that X "contributed toward this customer's predicted churn risk." A feature can
+matter to the model (`Partner`, `gender`) without being something the business can act on,
+and a feature's coefficient can point in a direction that resists a simple story — see
+[Limitations](#limitations) for the `MonthlyCharges` and `TotalCharges` caveats.
+
+### Layer 2: Retention rules (`src/retention/recommendations.py`)
+
+A displayed risk driver doesn't automatically deserve a suggested action. Two filters
+apply, in order:
+
+1. **Is this feature type actionable at all?** `gender`, `SeniorCitizen`, `Partner`, and
+   `Dependents` may show up as prediction signals, but the business has no lever for any
+   of them — they're always labeled non-actionable context, never turned into a
+   recommendation. `TotalCharges` is excluded for a different reason: it's mechanically
+   correlated with both `tenure` and `MonthlyCharges`, so its coefficient can point in an
+   unintuitive direction for reasons that have nothing to do with pricing — turning it
+   into a business claim would be building a story the data can't support.
+2. **Does this specific customer's value trigger the rule?** Each actionable feature has
+   exactly one rule, readable top-to-bottom in `RETENTION_RULES`:
+
+   | Feature | Condition | Suggested action |
+   |---|---|---|
+   | `Contract` | `== "Month-to-month"` | Offer an incentive to move to a longer-term contract |
+   | `TechSupport` | `== "No"` | Offer a free or discounted tech-support trial |
+   | `PaymentMethod` | `== "Electronic check"` | Offer an incentive to switch to automatic payment |
+   | `tenure` | `< 12` | Place customer in an early-life retention or onboarding campaign |
+   | `MonthlyCharges` | `> training mean` | Review the customer's current plan, pricing, and bundle |
+   | `OnlineSecurity` | `== "No"` | Consider an Online Security trial or bundled offer |
+   | `OnlineBackup` | `== "No"` | Consider an Online Backup trial or bundled offer |
+   | `DeviceProtection` | `== "No"` | Consider a Device Protection trial or bundled offer |
+
+   A customer who already has tech support, is on a two-year contract, or already pays
+   above-average charges simply doesn't trigger that row — even if the feature happens to
+   appear as a (usually weak) risk driver for unrelated reasons. This is why
+   `MonthlyCharges` deliberately checks *direction*: a customer with a positive
+   `MonthlyCharges` contribution but genuinely below-average charges must never receive a
+   pricing recommendation, because the positive contribution there comes from the
+   coefficient's sign, not from the customer overpaying.
+
+**Traceability is enforced structurally, not by convention**: recommendations are
+generated only by iterating the *displayed* top-N risk drivers — never from protective
+factors, and never from a feature outside the shown list, even if its rule condition
+would otherwise be true. `tests/test_retention.py` pins this behavior directly (limiting
+`top_n` to 1 and confirming the other three otherwise-true rules don't fire).
+
+**These are business-rule suggestions, not causally validated treatments.** The IBM Telco
+dataset has no record of retention offers made, discounts given, campaign responses, or
+complaint/satisfaction history — so there is no way to know from this data whether any of
+these actions actually change a customer's behavior. See
+[Future State](#future-state-toward-intervention-targeting) for what would be needed to
+move beyond that.
+
+### Three distinct layers, kept separate on purpose
+
+| Layer | Answers | Lives in | Not to be confused with |
+|---|---|---|---|
+| **Model prediction** | What does this customer look like to the churn model? | `src/churn_model.py` | — |
+| **Model explanation** | What signals drove that prediction? | `src/retention/explain.py` | A causal explanation |
+| **Business recommendation** | What could the business consider doing? | `src/retention/recommendations.py` | A proven treatment |
+
+`src/retention/service.py` (`RetentionIntelligenceService`) is the only place that
+combines all three — it contains no modeling math and no business rules of its own, only
+orchestration.
+
 ## API
 
 Built with FastAPI around the saved pipeline ([`api/main.py`](api/main.py),
-[`api/schemas.py`](api/schemas.py), [`src/churn_model.py`](src/churn_model.py)):
+[`api/schemas.py`](api/schemas.py), [`src/churn_model.py`](src/churn_model.py),
+[`src/retention/`](src/retention/)):
 
 - **Loads the model once at startup**, not per-request (`ChurnModelService`, loaded in
   a FastAPI `lifespan` handler).
@@ -477,7 +594,8 @@ Built with FastAPI around the saved pipeline ([`api/main.py`](api/main.py),
   category is rejected with a `422` instead of being silently absorbed by the
   underlying `OneHotEncoder(handle_unknown="ignore")`.
 - **`GET /health`** — reports model status, model type, and the active threshold.
-- **`POST /predict`** — returns:
+- **`POST /predict`** — now returns full retention intelligence, not just a probability
+  (existing fields are unchanged, so nothing that worked before broke):
   - `churn_probability` — raw model output, between 0 and 1
   - `prediction` — `0` or `1`, using the stored threshold
   - `label` — `"Likely to Churn"` / `"Likely to Stay"`
@@ -486,6 +604,16 @@ Built with FastAPI around the saved pipeline ([`api/main.py`](api/main.py),
     probability for quick scanning (below the threshold = Low, at/above it up to 0.60 =
     Medium, 0.60+ = High). This is _not_ a second trained model, and it is not a causal
     claim about why a customer is at risk — see [Limitations](#limitations).
+  - `risk_drivers` / `protective_factors` — up to 5 each, every item shaped as
+    `{feature, explanation, contribution, actionable}`. `actionable` means "the business
+    has a playbook entry for this feature type," independent of whether an action
+    actually fired for this customer (e.g. `TechSupport` is actionable even for a
+    customer who already has it).
+  - `suggested_actions` — `{driver, action}` pairs, generated only from the displayed
+    `risk_drivers` (see [previous section](#from-churn-prediction-to-retention-decision-support)).
+- Response models (`RiskDriver`, `RetentionAction`, `RetentionIntelligenceResponse` in
+  [`api/schemas.py`](api/schemas.py)) carry the "not causal / not a validated treatment"
+  caveats directly in their field descriptions, so they show up in the Swagger docs too.
 - Automatic OpenAPI/Swagger docs at `/docs` (and ReDoc at `/redoc`).
 - A startup check asserts the request schema's fields exactly match the pipeline's
   expected input columns, so schema drift fails loudly at boot instead of silently at
@@ -552,6 +680,13 @@ is just a 0/1 lookup, `StandardScaler` is `(x - mean) / scale`, and
 evaluates exactly that formula, using the real weights in
 `docs/model_params.js`.
 
+**This now includes the full retention-intelligence layer, not just the
+probability** — `docs/model.js` also mirrors `src/retention/explain.py`
+(per-feature contributions, readable explanations, top-N risk drivers and
+protective factors) and `src/retention/recommendations.py` (the same 8-rule
+playbook table, reproduced in JS). Nothing about the explanation or
+recommendation output differs between the live API and this static demo.
+
 - **[`docs/export_model_params.py`](docs/export_model_params.py)** loads the
   same `models/churn_logistic_model.joblib` the API uses and writes its
   coefficients, one-hot categories, and scaler mean/scale values to
@@ -560,14 +695,17 @@ evaluates exactly that formula, using the real weights in
   ```bash
   python docs/export_model_params.py
   ```
-- **[`docs/model.js`](docs/model.js)** is the generic scoring function that
-  reads those parameters and computes a probability.
+- **[`docs/model.js`](docs/model.js)** computes the probability, the top risk
+  drivers / protective factors, and the suggested actions — `analyzeCustomer()`
+  returns the same shape as the API's `/predict` response. `predictChurn()` is
+  kept as a thin wrapper for callers that only need the probability fields.
 - **[`tests/test_docs_model_js.py`](tests/test_docs_model_js.py)** runs the
   *actual* `docs/model.js` file through Node and asserts it matches
-  `ChurnModelService`'s output exactly (within floating-point tolerance) —
-  this is what keeps the JS reimplementation honest against the real
-  pipeline instead of silently drifting from it. It's skipped automatically
-  if Node.js isn't installed.
+  `ChurnModelService` and `RetentionIntelligenceService` output exactly
+  (within floating-point tolerance) — for the probability **and** every risk
+  driver, protective factor, and suggested action. This is what keeps the JS
+  reimplementation honest against the real pipeline instead of silently
+  drifting from it. Skipped automatically if Node.js isn't installed.
 
 **To publish it:** push this repo to GitHub, then in the repo's Settings →
 Pages, set Source to "Deploy from a branch", branch `main`, folder `/docs`.
@@ -590,14 +728,27 @@ error rather than a confusing one from deep inside sklearn.
 
 [`tests/test_api.py`](tests/test_api.py) covers the HTTP layer: `/health` reports the
 right threshold and model type, a valid `/predict` request returns a well-formed
-response, and invalid requests (missing field, an out-of-vocabulary category, a
-negative tenure) are all rejected with `422` rather than crashing or silently producing
-a meaningless prediction.
+response including the retention-intelligence fields, invalid requests (missing field,
+an out-of-vocabulary category, a negative tenure) are all rejected with `422`, risk
+drivers/protective factors serialize cleanly and have the right sign, and specific
+scenarios that should never produce a recommendation don't (a tech-support customer
+never gets the trial offer, a two-year contract never gets the upgrade offer,
+below-average charges never trigger the pricing action).
+
+[`tests/test_retention.py`](tests/test_retention.py) covers the explanation and
+recommendation layers directly: contributions cover every transformed feature and sort
+correctly, the actionable-feature set matches the documented playbook exactly, each of
+the 8 rules fires only under its documented condition (and not otherwise — e.g.
+`TechSupport = Yes` never suggests a trial, a non-month-to-month contract never suggests
+upgrading), a pinned regression test reproduces the notebook's worked example number for
+number, and a `top_n=1` test proves recommendations only come from *displayed* risk
+drivers even when a lower-ranked feature's rule condition is also true.
 
 [`tests/test_docs_model_js.py`](tests/test_docs_model_js.py) runs the actual
 client-side JS from [Static Demo (GitHub Pages)](#static-demo-github-pages) through
-Node and checks it against the real pipeline, so the two can't silently drift apart.
-Skipped automatically if Node.js isn't installed.
+Node and checks it against the real pipeline — both the plain prediction and the full
+retention analysis (drivers, protective factors, suggested actions) — so the two can't
+silently drift apart. Skipped automatically if Node.js isn't installed.
 
 ## Example Prediction Request/Response
 
@@ -624,16 +775,45 @@ curl -X POST http://127.0.0.1:8000/predict \
   "prediction": 1,
   "label": "Likely to Churn",
   "threshold": 0.3,
-  "risk_category": "High"
+  "risk_category": "High",
+  "risk_drivers": [
+    { "feature": "tenure", "explanation": "Tenure: 5 months (below average)", "contribution": 1.4602, "actionable": true },
+    { "feature": "Contract", "explanation": "Contract = Month-to-month", "contribution": 0.6334, "actionable": true },
+    { "feature": "InternetService", "explanation": "InternetService = Fiber optic", "contribution": 0.5295, "actionable": false },
+    { "feature": "PaymentMethod", "explanation": "PaymentMethod = Electronic check", "contribution": 0.2372, "actionable": true },
+    { "feature": "TechSupport", "explanation": "TechSupport = No", "contribution": 0.1545, "actionable": true }
+  ],
+  "protective_factors": [
+    { "feature": "TotalCharges", "explanation": "Total charges: $420.75 (below average)", "contribution": -0.4923, "actionable": false },
+    { "feature": "MultipleLines", "explanation": "MultipleLines = No", "contribution": -0.2757, "actionable": false },
+    { "feature": "MonthlyCharges", "explanation": "Monthly charges: $85.50 (above average)", "contribution": -0.2723, "actionable": true },
+    { "feature": "SeniorCitizen", "explanation": "SeniorCitizen = 0", "contribution": -0.2302, "actionable": false },
+    { "feature": "PhoneService", "explanation": "PhoneService = Yes", "contribution": -0.2175, "actionable": false }
+  ],
+  "suggested_actions": [
+    { "driver": "Tenure: 5 months (below average)", "action": "Place customer in an early-life retention or onboarding campaign" },
+    { "driver": "Contract = Month-to-month", "action": "Offer an incentive to move to a longer-term contract" },
+    { "driver": "PaymentMethod = Electronic check", "action": "Offer an incentive to switch to automatic payment" },
+    { "driver": "TechSupport = No", "action": "Offer a free or discounted tech-support trial" }
+  ]
 }
 ```
+
+Note `MonthlyCharges` appears as a **protective** factor here, even though this
+customer's charges ($85.50) are above average — that's a genuine, if unintuitive, model
+signal (see [Limitations](#limitations)), and it's exactly why no pricing action is
+suggested: the pricing rule only ever fires from a *risk* driver, and `MonthlyCharges`
+isn't one for this customer. `InternetService` and the protective factors are shown as
+context (`actionable: false`) since the business has no playbook entry for them.
 
 For contrast, a long-tenure customer on a two-year contract with several add-on
 services (`tenure: 65`, `Contract: "Two year"`, `PaymentMethod: "Bank transfer
 (automatic)"`, otherwise well-covered on security/backup/support) scores
-`churn_probability: 0.0044` → `"Likely to Stay"` / `"Low"` risk — consistent with the
-`tenure` and `Contract` effects identified back in [EDA Insights](#eda-insights) and
-confirmed as the top two features by permutation importance.
+`churn_probability: 0.0044` → `"Likely to Stay"` / `"Low"` risk, with **zero** suggested
+actions — every one of that customer's actionable signals is already favorable, which is
+correct behavior, not a bug. This is consistent with the `tenure` and `Contract` effects
+identified back in [EDA Insights](#eda-insights) and confirmed as the top two features by
+permutation importance.
 
 ## Repository Structure
 
@@ -652,7 +832,12 @@ customer-churn-prediction/
 │   └── export_model_params.py       # Regenerates model_params.js from models/churn_logistic_model.joblib
 ├── src/
 │   ├── __init__.py
-│   └── churn_model.py               # Loads the saved pipeline + threshold, runs inference
+│   ├── churn_model.py               # Loads the saved pipeline + threshold, runs inference
+│   └── retention/
+│       ├── __init__.py
+│       ├── explain.py               # Per-customer feature contributions + readable explanations
+│       ├── recommendations.py       # The 8-rule retention playbook, inspectable top to bottom
+│       └── service.py               # Orchestrates prediction + explanation + recommendations
 ├── models/
 │   ├── churn_logistic_model.joblib  # Final trained sklearn Pipeline
 │   └── model_metadata.json          # {"threshold": 0.30, "model_type": ..., ...}
@@ -660,14 +845,16 @@ customer-churn-prediction/
 │   ├── raw/                         # data.csv goes here (gitignored, see Running Locally)
 │   └── processed/                   # reserved for cached processed data (currently unused)
 ├── notebooks/
-│   ├── 01_data-understanding.ipynb  # Feature-by-feature EDA and churn hypotheses
-│   └── 02_EDA.ipynb                 # Preprocessing, modeling, CV, threshold tuning
+│   ├── 01_data-understanding.ipynb        # Feature-by-feature EDA and churn hypotheses
+│   ├── 02_EDA.ipynb                       # Preprocessing, modeling, CV, threshold tuning
+│   └── 03_retention-intelligence.ipynb    # Original exploration of the explanation/recommendation logic
 ├── reports/
 │   ├── figures/                     # PNGs used in this README
 │   └── generate_summary_figures.py  # Regenerates the non-EDA summary charts from recorded metrics
 ├── tests/
 │   ├── conftest.py
 │   ├── test_model.py
+│   ├── test_retention.py             # Explanation + recommendation + service-layer tests
 │   ├── test_api.py
 │   └── test_docs_model_js.py         # Verifies docs/model.js matches the real pipeline
 ├── requirements.txt                 # Full dev environment (API + notebooks + tests)
@@ -692,6 +879,28 @@ customer-churn-prediction/
 - **No causal claims.** Every relationship in this README (tenure, contract type,
   internet service, etc.) is correlational, learned from historical patterns. The model
   estimates risk; it does not explain _why_ an individual customer is at risk.
+- **Explanations describe the model, not the customer.** A risk driver means "this
+  signal pushed the model's output," never "this is why the customer will leave." The
+  wording throughout the API and UI ("contributed toward," never "because of") is
+  deliberate — see
+  [From Churn Prediction to Retention Decision Support](#from-churn-prediction-to-retention-decision-support).
+- **`MonthlyCharges` and `TotalCharges` coefficients can point in unintuitive
+  directions.** Both are correlated with `tenure`, so a logistic regression coefficient
+  on either can reflect a confounded relationship rather than a clean pricing effect —
+  e.g. a customer paying *below*-average charges can still get a positive
+  `MonthlyCharges` contribution. The pricing rule only fires above the training mean for
+  exactly this reason, and `TotalCharges` was deliberately left off the recommendation
+  playbook entirely (see [Example Prediction Request/Response](#example-prediction-requestresponse)
+  for a worked example of this).
+- **Suggested actions are business-rule heuristics, not validated treatments.** The
+  dataset has no record of retention offers made, discounts given, campaign responses,
+  or complaint/satisfaction history, so there's no way to measure whether any suggested
+  action would actually change a given customer's behavior. See
+  [Future State](#future-state-toward-intervention-targeting).
+- **Recommendation quality is bounded by the fixed top-N drivers shown.** A feature with
+  a real (if smaller) contribution outside the top 5 will never generate a suggestion,
+  even if its rule condition is true — a deliberate traceability choice (recommendations
+  should only ever point back to a driver the user can actually see), not an oversight.
 - **Single static snapshot.** The dataset has no time dimension, so the model can't
   detect drift, seasonality, or the effect of pricing/competitive changes over time.
 - **Not production-hardened.** The API has permissive CORS for local demo purposes, no
@@ -707,6 +916,56 @@ customer-churn-prediction/
   deprecated). Predictions are verified correct today (see [Testing](#testing)), but the
   model may need to be re-saved if a future numpy release turns this into a hard error.
 
+## Future State: Toward Intervention Targeting
+
+Everything shipped in this project stops at "here's a risk score, here's what drove it,
+here's a business-rule suggestion." A more mature system would go one step further: not
+every suggested action helps every customer equally, and a customer with an extremely
+high churn probability isn't necessarily the customer most likely to actually be *saved*
+by an intervention — some high-risk customers will leave no matter what a retention team
+offers them, and some lower-risk customers might respond very well to a small nudge.
+That's the difference between **churn probability** and **intervention responsiveness**
+(sometimes called uplift or persuadability), and this project deliberately does not
+attempt to model it:
+
+```
+customer
+   │
+   ▼
+churn prediction            (implemented — src/churn_model.py)
+   │
+   ▼
+prediction explanation      (implemented — src/retention/explain.py)
+   │
+   ▼
+possible interventions      (implemented, as business-rule suggestions —
+   │                         src/retention/recommendations.py)
+   ▼
+treatment-response data     (NOT available in this dataset)
+   │
+   ▼
+uplift / treatment-effect modeling     (NOT implemented)
+   │
+   ▼
+determine which intervention is most likely
+to actually change this customer's behavior  (NOT implemented)
+```
+
+The IBM Telco dataset used throughout this project has no record of which customers
+were ever offered a retention deal, what the offer was, whether they accepted it, or
+whether it changed their outcome. Without that treatment/response history, there is no
+statistically honest way to estimate uplift — building one anyway would mean inventing a
+"retention opportunity score" the data cannot actually support, which this project
+deliberately avoids (see [Limitations](#limitations)).
+
+A real telecom with historical campaign data (which customers got which offer, and what
+happened next) could extend this pipeline with genuine uplift modeling — e.g. a
+two-model or causal-forest approach estimating each customer's *treatment effect* for
+each candidate action, then prioritizing outreach by expected impact rather than by raw
+churn probability alone. That is a meaningfully different, harder problem than anything
+implemented here, and is intentionally left as future work rather than approximated with
+a fabricated metric.
+
 ## Future Improvements
 
 - Lock the test set away entirely after a single final check in any future iteration,
@@ -715,9 +974,12 @@ customer-churn-prediction/
   system hinges on thresholding a probability, calibration quality matters.
 - Select the threshold by actual retention-offer cost vs. customer lifetime value
   instead of F1 as a proxy.
-- Add local explainability (e.g. SHAP) so a retention agent sees _which_ factors drove
-  an individual customer's score — with the same correlation-not-causation caveat
-  maintained in the UI.
+- Extend the explanation layer with SHAP or similar for a more rigorous local
+  attribution method than raw coefficient contributions, while keeping the same
+  correlation-not-causation caveat in the UI.
+- Collect retention-offer/response history so intervention targeting
+  ([Future State](#future-state-toward-intervention-targeting)) becomes possible without
+  fabricating a metric the current data can't support.
 - Monitor for model drift once real outcomes are available, and establish a retraining
   cadence.
 - Add authentication and rate limiting before any real deployment.

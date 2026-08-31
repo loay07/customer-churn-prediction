@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from src.churn_model import ChurnModelService
+from src.retention.service import RetentionIntelligenceService
 
 DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"
 NODE = shutil.which("node")
@@ -27,21 +28,34 @@ NODE = shutil.which("node")
 pytestmark = pytest.mark.skipif(NODE is None, reason="Node.js is not installed; skipping JS parity test")
 
 
-def _predict_via_node(customer: dict) -> dict:
+def _run_node(function_name: str, customer: dict) -> dict:
     script = f"""
-const {{ predictChurn }} = require({json.dumps(str(DOCS_DIR / "model.js"))});
+const {{ {function_name} }} = require({json.dumps(str(DOCS_DIR / "model.js"))});
 const params = require({json.dumps(str(DOCS_DIR / "model_params.js"))});
 const customer = {json.dumps(customer)};
-console.log(JSON.stringify(predictChurn(customer, params)));
+console.log(JSON.stringify({function_name}(customer, params)));
 """
     result = subprocess.run([NODE, "-e", script], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, f"node failed:\n{result.stderr}"
     return json.loads(result.stdout)
 
 
+def _predict_via_node(customer: dict) -> dict:
+    return _run_node("predictChurn", customer)
+
+
+def _analyze_via_node(customer: dict) -> dict:
+    return _run_node("analyzeCustomer", customer)
+
+
 @pytest.fixture(scope="module")
 def service() -> ChurnModelService:
     return ChurnModelService()
+
+
+@pytest.fixture(scope="module")
+def retention_service() -> RetentionIntelligenceService:
+    return RetentionIntelligenceService()
 
 
 def test_js_probability_matches_python_pipeline(service: ChurnModelService, sample_customer: dict) -> None:
@@ -62,3 +76,39 @@ def test_js_probability_matches_python_pipeline_for_loyal_customer(
 
     assert node_result["churn_probability"] == pytest.approx(real_result.churn_probability, abs=1e-9)
     assert node_result["risk_category"] == real_result.risk_category
+
+
+def _driver_tuples(drivers: list[dict]) -> list[tuple[str, str, bool]]:
+    return [(d["feature"], d["explanation"], d["actionable"]) for d in drivers]
+
+
+def test_js_analysis_matches_python_retention_service(
+    retention_service: RetentionIntelligenceService, sample_customer: dict
+) -> None:
+    node_result = _analyze_via_node(sample_customer)
+    real_result = retention_service.analyze(sample_customer)
+
+    assert node_result["churn_probability"] == pytest.approx(real_result.churn_probability, abs=1e-9)
+    assert _driver_tuples(node_result["risk_drivers"]) == [
+        (d.feature, d.explanation, d.actionable) for d in real_result.risk_drivers
+    ]
+    assert _driver_tuples(node_result["protective_factors"]) == [
+        (d.feature, d.explanation, d.actionable) for d in real_result.protective_factors
+    ]
+    assert [(a["driver"], a["action"]) for a in node_result["suggested_actions"]] == [
+        (a.driver, a.action) for a in real_result.suggested_actions
+    ]
+
+
+def test_js_analysis_matches_python_retention_service_for_loyal_customer(
+    retention_service: RetentionIntelligenceService, loyal_customer: dict
+) -> None:
+    node_result = _analyze_via_node(loyal_customer)
+    real_result = retention_service.analyze(loyal_customer)
+
+    assert node_result["churn_probability"] == pytest.approx(real_result.churn_probability, abs=1e-9)
+    assert _driver_tuples(node_result["risk_drivers"]) == [
+        (d.feature, d.explanation, d.actionable) for d in real_result.risk_drivers
+    ]
+    assert node_result["suggested_actions"] == []
+    assert real_result.suggested_actions == []

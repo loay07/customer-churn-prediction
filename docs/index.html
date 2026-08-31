@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Customer Churn Risk — Retention Tool</title>
+<title>Customer Retention Intelligence — Static Demo</title>
 <style>
   :root {
     --bg: #f4f6f9;
@@ -209,25 +209,116 @@
     font-weight: 600;
   }
 
-  .recommendation {
-    margin-top: 16px;
-    padding: 12px 14px;
-    border-radius: 9px;
-    font-size: 0.88rem;
-    line-height: 1.45;
+  .section-block {
+    margin-top: 22px;
   }
 
-  .rec-elevated { background: var(--high-bg); color: #7a2323; }
-  .rec-normal { background: var(--low-bg); color: #145c3f; }
+  .section-block.section-secondary {
+    opacity: 0.85;
+  }
+
+  .section-title {
+    font-size: 0.74rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 10px;
+    font-weight: 700;
+  }
+
+  .driver-list, .action-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+  }
+
+  .driver-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 0.87rem;
+  }
+
+  .driver-arrow {
+    font-weight: 700;
+    flex-shrink: 0;
+    width: 14px;
+  }
+
+  .driver-arrow.up { color: var(--high); }
+  .driver-arrow.down { color: var(--low); }
+
+  .driver-text { flex: 1; }
+
+  .context-tag {
+    font-size: 0.66rem;
+    color: var(--muted);
+    background: #eef0f4;
+    border-radius: 999px;
+    padding: 1px 8px;
+    white-space: nowrap;
+  }
+
+  .action-list li {
+    font-size: 0.87rem;
+    padding-left: 15px;
+    position: relative;
+    line-height: 1.4;
+  }
+
+  .action-list li::before {
+    content: "•";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+  }
+
+  .no-actions-note {
+    font-size: 0.85rem;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .tech-toggle {
+    margin-top: 20px;
+    background: none;
+    border: none;
+    color: var(--accent);
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .tech-toggle:hover { background: none; color: var(--accent-dark); }
+
+  .tech-details {
+    margin-top: 10px;
+    font-size: 0.74rem;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    background: #f7f8fa;
+    border-radius: 8px;
+    padding: 10px 12px;
+    white-space: pre-wrap;
+    max-height: 220px;
+    overflow-y: auto;
+  }
 
   .disclaimer {
-    margin-top: 14px;
+    margin-top: 18px;
     font-size: 0.76rem;
     color: var(--muted);
     line-height: 1.5;
     border-top: 1px solid var(--border);
     padding-top: 12px;
   }
+
+  .disclaimer p { margin: 0 0 8px; }
+  .disclaimer p:last-child { margin-bottom: 0; }
 
   footer {
     max-width: 1180px;
@@ -243,11 +334,11 @@
 <body>
 
 <header>
-  <h1>Customer Churn Risk</h1>
+  <h1>Customer Retention Intelligence</h1>
   <p>
-    A retention decision-support tool for telecom account teams — enter a customer's
-    profile to estimate churn risk from historical patterns and get a threshold-based
-    recommendation.
+    A retention decision-support tool for telecom account teams. Beyond a churn
+    probability, it surfaces which signals drove that prediction and which of them
+    the business could realistically act on before the customer leaves.
   </p>
   <span class="static-badge">Runs entirely in your browser — no server, no data leaves your device</span>
 </header>
@@ -396,7 +487,7 @@
 
   <div class="result-panel">
     <div class="card" id="result-card">
-      <h2>Churn Risk Assessment</h2>
+      <h2>Customer Retention Intelligence</h2>
       <div class="placeholder" id="result-placeholder">
         Fill in the customer's profile and click <strong>Assess Churn Risk</strong>
         to see the model's estimate here.
@@ -413,12 +504,53 @@
           <span id="classification-label">Likely to Stay</span>
         </div>
 
-        <div class="recommendation" id="recommendation"></div>
+        <div class="section-block">
+          <h3 class="section-title">Key Prediction Drivers</h3>
+          <ul class="driver-list" id="risk-driver-list"></ul>
+        </div>
+
+        <div class="section-block section-secondary">
+          <h3 class="section-title">Risk-Reducing Signals</h3>
+          <ul class="driver-list" id="protective-factor-list"></ul>
+        </div>
+
+        <div class="section-block">
+          <h3 class="section-title">Suggested Retention Actions</h3>
+          <ul class="action-list" id="action-list"></ul>
+          <div class="no-actions-note" id="no-actions-note" style="display:none;">
+            No specific playbook action applies here — this customer's actionable
+            signals (contract, payment method, support add-ons, tenure, pricing)
+            are already favorable.
+          </div>
+        </div>
+
+        <button type="button" class="tech-toggle" id="tech-toggle">Show technical details</button>
+        <div class="tech-details" id="tech-details" style="display:none;"></div>
 
         <div class="disclaimer">
-          This estimate is based on statistical patterns learned from historical
-          customer data. It reflects correlation, not a proven cause of churn, and
-          should support a human retention decision rather than replace one.
+          <p>
+            <strong>Model prediction:</strong> the probability and risk band above come
+            directly from the trained model. Risk bands (Low/Medium/High) are a fixed
+            business-interpretation of the probability, not a separately trained or
+            statistically calibrated output.
+          </p>
+          <p>
+            <strong>Model explanation:</strong> drivers and signals above describe what
+            influenced this specific prediction (a signal "contributed toward" the
+            result), not a proven cause of churn. Items marked "context" are not on the
+            retention playbook below and are shown for transparency only.
+          </p>
+          <p>
+            <strong>Business recommendation:</strong> suggested actions are business-rule
+            heuristics tied to the drivers above, not causally validated treatments — this
+            dataset has no record of past offers or whether they worked.
+          </p>
+          <p>
+            This page computes everything above entirely in your browser from the same
+            trained model's exported weights (see <code>model.js</code>) — nothing is
+            sent anywhere. It is verified to match the live FastAPI backend byte-for-byte
+            in this project's test suite.
+          </p>
         </div>
       </div>
     </div>
@@ -457,12 +589,6 @@
   tenureInput.addEventListener("input", syncTotalCharges);
   monthlyInput.addEventListener("input", syncTotalCharges);
 
-  const RECOMMENDATIONS = {
-    Low: "No action needed — this customer's profile closely matches customers who stay.",
-    Medium: "Consider proactive retention outreach, such as a check-in call or a loyalty offer.",
-    High: "Recommend prioritized retention outreach — this profile closely matches customers who have churned historically.",
-  };
-
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     errorText.textContent = "";
@@ -491,7 +617,7 @@
     };
 
     try {
-      const result = predictChurn(payload, CHURN_MODEL_PARAMS);
+      const result = analyzeCustomer(payload, CHURN_MODEL_PARAMS);
       renderResult(result);
     } catch (err) {
       errorText.textContent = err.message || "Something went wrong scoring this profile.";
@@ -517,10 +643,89 @@
 
     document.getElementById("classification-label").textContent = result.label;
 
-    const rec = document.getElementById("recommendation");
-    rec.textContent = RECOMMENDATIONS[result.risk_category] || "";
-    rec.className = `recommendation ${result.risk_category === "Low" ? "rec-normal" : "rec-elevated"}`;
+    renderDriverList(document.getElementById("risk-driver-list"), result.risk_drivers, "up");
+    renderDriverList(document.getElementById("protective-factor-list"), result.protective_factors, "down");
+    renderActions(result.suggested_actions);
+    renderTechDetails(result);
   }
+
+  function renderDriverList(container, drivers, direction) {
+    container.innerHTML = "";
+
+    if (!drivers || drivers.length === 0) {
+      const li = document.createElement("li");
+      li.className = "driver-item";
+      li.textContent = "No notable signals in this direction.";
+      li.style.color = "var(--muted)";
+      container.appendChild(li);
+      return;
+    }
+
+    for (const driver of drivers) {
+      const li = document.createElement("li");
+      li.className = "driver-item";
+
+      const arrow = document.createElement("span");
+      arrow.className = `driver-arrow ${direction}`;
+      arrow.textContent = direction === "up" ? "↑" : "↓";
+      li.appendChild(arrow);
+
+      const text = document.createElement("span");
+      text.className = "driver-text";
+      text.textContent = driver.explanation;
+      li.appendChild(text);
+
+      if (!driver.actionable) {
+        const tag = document.createElement("span");
+        tag.className = "context-tag";
+        tag.textContent = "context";
+        li.appendChild(tag);
+      }
+
+      container.appendChild(li);
+    }
+  }
+
+  function renderActions(actions) {
+    const list = document.getElementById("action-list");
+    const note = document.getElementById("no-actions-note");
+    list.innerHTML = "";
+
+    if (!actions || actions.length === 0) {
+      note.style.display = "block";
+      return;
+    }
+
+    note.style.display = "none";
+    for (const action of actions) {
+      const li = document.createElement("li");
+      li.textContent = action.action;
+      li.title = `Driver: ${action.driver}`;
+      list.appendChild(li);
+    }
+  }
+
+  function renderTechDetails(result) {
+    const lines = [];
+    lines.push("Risk drivers (contribution, feature):");
+    for (const d of result.risk_drivers) {
+      lines.push(`  +${d.contribution.toFixed(4)}  ${d.explanation}`);
+    }
+    lines.push("");
+    lines.push("Protective factors (contribution, feature):");
+    for (const d of result.protective_factors) {
+      lines.push(`  ${d.contribution.toFixed(4)}  ${d.explanation}`);
+    }
+    document.getElementById("tech-details").textContent = lines.join("\n");
+  }
+
+  document.getElementById("tech-toggle").addEventListener("click", () => {
+    const details = document.getElementById("tech-details");
+    const btn = document.getElementById("tech-toggle");
+    const isHidden = details.style.display === "none";
+    details.style.display = isHidden ? "block" : "none";
+    btn.textContent = isHidden ? "Hide technical details" : "Show technical details";
+  });
 </script>
 </body>
 </html>
